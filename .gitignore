@@ -1,4 +1,4 @@
 terraform/.terraform/
 terraform/.terraform.lock.hcl
 terraform/tf.plan
-readme.md
+read.md
