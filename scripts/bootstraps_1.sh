@@ -1,44 +1,34 @@
 #!/bin/bash
 set -euxo pipefail
 
-# Log output
-exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+# Log everything to a file for debugging
+exec > >(tee -a /var/log/bootstrap.log)
+exec 2>&1
 
-# Ensure non-interactive apt
+echo "Bootstrap script started at $(date)"
+
+# Install AWS CLI and other required packages
+echo "Updating system packages..."
 export DEBIAN_FRONTEND=noninteractive
+apt-get update -y || { echo "System update failed"; exit 1; }
 
-# Wait for cloud-init and network
-sleep 10
-
-# Update package index
-apt-get update -y
-
-# Install required packages (excluding awscli v1)
-apt-get install -y apache2 php php-mysql mysql-client jq unzip curl
-
-# Install AWS CLI v2 (official installer)
-echo "Installing AWS CLI v2..."
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
-unzip -q /tmp/awscliv2.zip -d /tmp
-/tmp/aws/install
-rm -rf /tmp/aws /tmp/awscliv2.zip
-
-# Verify AWS CLI version
-aws --version
+echo "Installing required packages..."
+apt-get install -y apache2 php php-mysql mysql-client awscli jq || { echo "Package installation failed"; exit 1; }
 
 # Enable and start Apache
-systemctl enable apache2
-systemctl start apache2
+echo "Configuring Apache..."
+systemctl enable apache2 || { echo "Failed to enable apache2"; exit 1; }
+systemctl start apache2 || { echo "Failed to start apache2"; exit 1; }
 
 # Get AWS region from instance metadata
 REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
 
 # Fetch database credentials from SSM Parameter Store
 echo "Fetching database credentials from SSM..."
-DB_HOST=$(aws ssm get-parameter --name "db_host" --region "$REGION" --with-decryption --query "Parameter.Value" --output text)
-DB_USER=$(aws ssm get-parameter --name "db_username" --region "$REGION" --with-decryption --query "Parameter.Value" --output text)
-DB_PASS=$(aws ssm get-parameter --name "db_password" --region "$REGION" --with-decryption --query "Parameter.Value" --output text)
-DB_NAME=$(aws ssm get-parameter --name "db_name" --region "$REGION" --with-decryption --query "Parameter.Value" --output text)
+DB_HOST=$(aws ssm get-parameter --name "db_host" --region $REGION --with-decryption --query "Parameter.Value" --output text)
+DB_USER=$(aws ssm get-parameter --name "db_username" --region $REGION --with-decryption --query "Parameter.Value" --output text)
+DB_PASS=$(aws ssm get-parameter --name "db_password" --region $REGION --with-decryption --query "Parameter.Value" --output text)
+DB_NAME=$(aws ssm get-parameter --name "db_name" --region $REGION --with-decryption --query "Parameter.Value" --output text)
 
 # Verify we got all parameters
 if [ -z "$DB_HOST" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASS" ] || [ -z "$DB_NAME" ]; then
@@ -59,7 +49,7 @@ define('DB_DATABASE', '$DB_NAME');
 ?>
 EOF
 
-# Secure permissions
+# Secure permissions - Ubuntu uses www-data user
 chown -R www-data:www-data /var/www
 chmod 640 /var/www/inc/dbinfo.inc
 
@@ -68,7 +58,8 @@ echo "Waiting for database to be ready..."
 DB_READY=false
 for i in {1..60}; do
     echo "Database connection attempt $i/60..."
-    if mysql -h "$DB_HOST" -P 3306 -u "$DB_USER" -p"$DB_PASS" -e "SELECT 1;" 2>/dev/null; then
+    # Ubuntu uses mysql command with proper hostname and port separation
+    if mysql -h "${DB_HOST}" -P 3306 -u "${DB_USER}" -p"${DB_PASS}" -e "SELECT 1;" 2>/dev/null; then
         echo "Database connection successful!"
         DB_READY=true
         break
@@ -80,57 +71,54 @@ done
 if [ "$DB_READY" = false ]; then
     echo "ERROR: Database connection failed after 60 attempts (10 minutes)"
     echo "Debug info:"
-    echo "  DB_HOST: $DB_HOST"
-    echo "  DB_USER: $DB_USER"
-    echo "  DB_NAME: $DB_NAME"
-    
-    if ping -c 3 "$DB_HOST" 2>/dev/null; then
+    echo "  DB_HOST: ${DB_HOST}"
+    echo "  DB_USER: ${DB_USER}"
+    echo "  DB_NAME: ${DB_NAME}"
+    # Try to test connectivity to the host
+    echo "Testing network connectivity to database host..."
+    if ping -c 3 "${DB_HOST}" 2>/dev/null; then
         echo "  Host is reachable via ping"
     else
         echo "  Host is NOT reachable via ping"
     fi
     
-    if timeout 10 bash -c "</dev/tcp/$DB_HOST/3306" 2>/dev/null; then
+    # Try to test port connectivity
+    if timeout 10 bash -c "</dev/tcp/${DB_HOST}/3306" 2>/dev/null; then
         echo "  Port 3306 is open"
     else
         echo "  Port 3306 is NOT accessible"
     fi
-
+    
     echo "Attempting to continue without database setup..."
 fi
 
-# Initialize database and table
+# Initialize database and table using MySQL client (only if connection works)
 if [ "$DB_READY" = true ]; then
     echo "Setting up database and tables..."
-    mysql -h "$DB_HOST" -P 3306 -u "$DB_USER" -p"$DB_PASS" <<MYSQL_SCRIPT
-CREATE DATABASE IF NOT EXISTS $DB_NAME;
-USE $DB_NAME;
+    # Ubuntu uses mysql command with proper hostname and port separation
+    mysql -h "${DB_HOST}" -P 3306 -u "${DB_USER}" -p"${DB_PASS}" <<MYSQL_SCRIPT
+CREATE DATABASE IF NOT EXISTS ${DB_NAME};
+USE ${DB_NAME};
 CREATE TABLE IF NOT EXISTS EMPLOYEES (
   ID int(11) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   NAME VARCHAR(45),
   AGE INTEGER(3),
   CITY VARCHAR(45)
 );
+
 MYSQL_SCRIPT
     echo "Database setup completed successfully!"
 else
     echo "Skipping database setup due to connection issues"
 fi
 
-# Deploy web application
+# Deploy the application file corp.php
 echo "Deploying web application..."
 cat <<'EOF' > /var/www/html/corp.php
 <?php include "../inc/dbinfo.inc"; ?>
-<?php
-// Redirect after POST to avoid duplicate submissions
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-  header("Location: " . $_SERVER['PHP_SELF']);
-  exit();
-}
-?>
 <html>
 <body>
-<h1> Welcome to my project website database!</h1>
+<h1> Welcome to my project website database !</h1>
 <?php
   $connection = mysqli_connect(DB_SERVER, DB_USERNAME, DB_PASSWORD);
   if (mysqli_connect_errno()) echo "Failed to connect to MySQL: " . mysqli_connect_error();
@@ -220,11 +208,11 @@ function TableExists($tableName, $connection, $dbName) {
 </html>
 EOF
 
-# Set permissions
+# Set permissions - Ubuntu uses www-data user
 chown www-data:www-data /var/www/html/corp.php
 chmod 644 /var/www/html/corp.php
 
-# Create a basic index.html
+# Create a simple index.html for testing
 cat <<EOF > /var/www/html/index.html
 <!DOCTYPE html>
 <html>
@@ -249,4 +237,4 @@ ls -la /var/www/html/
 ls -la /var/www/inc/
 
 echo "=== Bootstrap script completed at $(date) ==="
-echo "Check logs with: sudo cat /var/log/user-data.log"
+echo "Check logs with: sudo cat /var/log/bootstrap.log"
