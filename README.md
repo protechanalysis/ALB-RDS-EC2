@@ -35,7 +35,7 @@ The infrastructure includes:
 ```bash
 .
 ├── assest/
-│   └── vpc_ec2_rds.drawio (4).png      # AWS Architecture Diagram
+│   └── architecture.png                # AWS Architecture Diagram
 ├── scripts/
 │   ├── bootstrap_1.sh                  # User data script for webserver 1
 │   └── bootstrap_2.sh                  # User data script for webserver 2
