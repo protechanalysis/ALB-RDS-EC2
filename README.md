@@ -8,7 +8,7 @@ Overview
 
 The infrastructure includes:
 
-- A custom **VPC** with public and private subnets across **two Availability Zones**
+- A custom **VPC** with public and private subnets across **two Availability Zones** with a vpc flow log stored in s3.
 - A **NAT Gateway** in a public subnet with a route to the internet for the EC2 instances.
 - An **Application Load Balancer (ALB)** to distribute traffic across EC2 instances
 - EC2 web servers in **private subnets**, provisioned with custom user data
@@ -20,7 +20,7 @@ The infrastructure includes:
 
 ## Architecture Diagram
 
-![AWS Architecture Diagram](./assest/alb_ec2_rds.png)
+![AWS Architecture Diagram](./assest/architecture_flow.png)
 
 > **Diagram Description**:
 > - **Users** connect through the **internet** to the **Application Load Balancer (ALB)** located in **public subnets**
