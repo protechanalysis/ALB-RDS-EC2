@@ -1,4 +1,4 @@
-# Terraform AWS High Availability Web Infrastructure
+# Highly Available and Secure Infrastructure on AWS for Beejan Technologies
 
 This repository contains modular, Terraform code to provision a **highly available**, **secure**, and **scalable** web infrastructure on AWS using best practices.
 
